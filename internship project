@@ -1,0 +1,1608 @@
+using Application.TAPS.Controls;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+ 
+namespace TAPS.Module.Style
+{
+    internal class StyleListImportCentricStyle
+    {
+        internal static readonly string ATTACHMENT_DIR_NAME = "ImportCentricStyle";
+ 
+        internal static string ImportCentricStyleCSV(DevExpress.XtraEditors.XtraForm callerForm, string fullFileName, out System.Data.DataTable dt)
+        {
+            dt = null;
+            string msg;
+ 
+            try
+            {
+                FileInfo fi = new FileInfo(fullFileName);
+                if (fi.Exists && fi.Length > 0)
+                {
+                    System.Threading.CancellationTokenSource tokenSource = new System.Threading.CancellationTokenSource();
+ 
+                    OpenWaitForm(callerForm, tokenSource);
+ 
+                    string caption = "Getting Ready...";
+                    string description = "Please wait...";
+                    GenericWaitForm.WaitFormState state = new GenericWaitForm.WaitFormState(caption, description, false);
+                    UpdateWaitForm(state);
+ 
+                    string timeStr = DateTime.Now.ToString("_yyyy-MM-dd_HH.mm.ss_fff_");
+                    string guidStr = Guid.NewGuid().ToString();
+ 
+                    caption = "Loading Data...";
+                    description = null;
+                    state = new GenericWaitForm.WaitFormState(caption, description, false);
+                    UpdateWaitForm(state);
+ 
+                    string sourceCSVFilePath = Path.GetDirectoryName(fullFileName);
+                    string sourceCSVFileName = Path.GetFileName(fullFileName);
+                    string objectName = ATTACHMENT_DIR_NAME;
+                    string toCSVFileName = GetFileNameForUpload(fullFileName, timeStr, guidStr);
+                    UploadFileToServer(sourceCSVFilePath, sourceCSVFileName, objectName, toCSVFileName);
+ 
+                    if (!tokenSource.Token.IsCancellationRequested)
+                    {
+                        caption = "Importing Data...";
+                        description = null;
+                        state = new GenericWaitForm.WaitFormState(caption, description, false);
+                        UpdateWaitForm(state);
+ 
+                        long currentUserId = Application.TAPS.Client.ApplicationController.GetInstance().GetApplicationContext().UserID;
+ 
+                        Application.TAPS.Common.QueryResult qr = Task.Run(() => STProxy.ImportCentricStyleCSV(currentUserId, guidStr, sourceCSVFileName, toCSVFileName)).Result;
+                        if (qr != null && qr.GetDataSet() != null && qr.GetDataSet().Tables != null && qr.GetDataSet().Tables.Count > 0 && qr.GetDataSet().Tables[0].Rows.Count > 0)
+                        {
+                            System.Data.DataRow dr = qr.GetDataSet().Tables[0].Rows[0];
+                            msg = dr["DISPLAY_MESSAGE"].ToString();
+ 
+                            if (qr.GetDataSet().Tables.Count > 1)
+                                dt = qr.GetDataSet().Tables[1];
+                        }
+                        else
+                            msg = "Unable to contact server.";
+                    }
+                    else
+                        msg = "Import cancelled.";
+                }
+                else
+                    msg = "Import file is blank.";
+            }
+            finally
+            {
+                CloseWaitForm();
+            }
+ 
+            return msg;
+        }
+ 
+        private static string GetFileNameForUpload(string fullFileName, string timeStr, string guidStr)
+        {
+            string prefix = "style";
+            string sourceFileName = Path.GetFileNameWithoutExtension(fullFileName);
+            string fileExtension = Path.GetExtension(fullFileName);
+ 
+            prefix = prefix.Replace(".", "");
+            timeStr = timeStr.Replace(".", "");
+            sourceFileName = sourceFileName.Replace(".", "");
+            guidStr = guidStr.Replace(".", "");
+ 
+            int maxLen = 128 - (prefix + timeStr + "_" + guidStr + fileExtension).Length;
+            if (sourceFileName.Length > maxLen)
+                sourceFileName = sourceFileName.Substring(0, maxLen);
+ 
+            string fileName = prefix + timeStr + sourceFileName + "_" + guidStr + fileExtension;
+            return fileName;
+        }
+ 
+        private static void UploadFileToServer(string sourceFilePath, string sourceFileName, string objectName, string toFileName)
+        {
+            if (objectName.Length > 0 && toFileName.Length > 0)
+            {
+               string destFilePath = System.Web.HttpUtility.UrlEncode("$" + objectName);
+                string destFileName = System.Web.HttpUtility.UrlEncode(toFileName);
+ 
+                Application.TAPS.Client.Communicator communicator = Application.TAPS.Client.ApplicationController.GetInstance().GetCommunicator();
+                communicator.UploadFile(sourceFilePath, sourceFileName, destFilePath, destFileName);
+            }
+        }
+ 
+        private class CSVDataProcessor
+        {
+            public int InvalidFileFormat { get; private set; }
+            public string InvalidFileFormatMessage { get; private set; }
+            public string Sql { get; private set; }
+ 
+            public CSVDataProcessor()
+            {
+                InvalidFileFormat = 0;
+                InvalidFileFormatMessage = "";
+                Sql = "";
+            }
+ 
+            public void ProcessData(System.Data.DataTable dt)
+            {
+                CSVRowContent rowContent = new CSVRowContent();
+                InvalidFileFormatMessage = rowContent.CheckInvalidFileFormat(dt);
+                InvalidFileFormat = InvalidFileFormatMessage.Length > 0 ? 1 : 0;
+                if (InvalidFileFormat == 0)
+                {
+                    StringBuilder s = new StringBuilder();
+                    int i = 0;
+                    foreach (System.Data.DataRow dr in dt.Rows)
+                    {
+                        rowContent.LoadData(dr, i);
+                        if (i++ % 30 == 0)
+                            s.Append(" INSERT INTO #csvdata (ROW_INDEX, CSV_ID, CSV_STDIV_CODE, CSV_SEASON_CODE, CSV_SEASON_DESC, CSV_STYLE_DESC, CSV_STYLE_NUM, CSV_COLOR_CODE, CSV_COLOR_DESC, CSV_COLOR_NRF, CSV_SIZESCALE_CODE, CSV_WHOLESALE_PRICE, CSV_RETAIL_PRICE, CSV_COST, CSV_PACKAGING, CSV_WEIGHT, CSV_STATUS, NEW_STYLE_CODE, NEW_STYLE_DESC, NEW_COLOR_CODE, NEW_COLOR_DESC, NEW_COLOR_NRF, NEW_STATUS) VALUES ");
+                        else
+                            s.Append(",");
+                        s.Append("(");
+                        s.Append("").Append(rowContent.ROW_INDEX).Append("");
+                        s.Append(",'").Append(rowContent.CSV_ID.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.CSV_STDIV_CODE.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.CSV_SEASON_CODE.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.CSV_SEASON_DESC.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.CSV_STYLE_DESC.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.CSV_STYLE_NUM.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.CSV_COLOR_CODE.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.CSV_COLOR_DESC.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.CSV_COLOR_NRF.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.CSV_SIZESCALE_CODE.Replace("'", "''")).Append("'");
+                        s.Append(",").Append(rowContent.CSV_WHOLESALE_PRICE).Append("");
+                        s.Append(",").Append(rowContent.CSV_RETAIL_PRICE).Append("");
+                        s.Append(",").Append(rowContent.CSV_COST).Append("");
+                        s.Append(",'").Append(rowContent.CSV_PACKAGING.Replace("'", "''")).Append("'");
+                        s.Append(",").Append(rowContent.CSV_WEIGHT).Append("");
+                        s.Append(",'").Append(rowContent.CSV_STATUS.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.NEW_STYLE_CODE.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.NEW_STYLE_DESC.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.NEW_COLOR_CODE.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.NEW_COLOR_DESC.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.NEW_COLOR_NRF.Replace("'", "''")).Append("'");
+                        s.Append(",'").Append(rowContent.NEW_STATUS.Replace("'", "''")).Append("'");
+                        s.Append(")");
+                    }
+                    s.Append(" ");
+                    Sql = s.ToString();
+                }
+            }
+ 
+            private class CSVRowContent
+            {
+                private string colId = "Id";
+ 
+                private static readonly string colStyleDiv = "Style Division";
+                private static readonly string colSeasonCode = "Season Code";
+                private static readonly string colSeasonDesc = "Season Description";
+                private static readonly string colStyleDesc = "Style";
+                private static readonly string colStyleNum = "Style #";
+                private static readonly string colColorCode = "Color Code";
+                private static readonly string colColorDesc = "Color Description";
+                private static readonly string colColorNRF = "NRF Color";
+                private static readonly string colSizeScale = "Size Scale";
+                private static readonly string colWholesalePrice = "Wholesale Price";
+                private static readonly string colRetailPrice = "Retail Price";
+                private static readonly string colEstCost = "Est Cost";
+                private static readonly string colPackaging = "Packaging";
+                private static readonly string colWeight = "Weight";
+                private static readonly string colStatus = "Status";
+ 
+                private List<string> colList;
+ 
+                public int ROW_INDEX { get; private set; }
+                public string CSV_ID { get; private set; }
+                public string CSV_STDIV_CODE { get; private set; }
+                public string CSV_SEASON_CODE { get; private set; }
+                public string CSV_SEASON_DESC { get; private set; }
+                public string CSV_STYLE_DESC { get; private set; }
+                public string CSV_STYLE_NUM { get; private set; }
+                public string CSV_COLOR_CODE { get; private set; }
+                public string CSV_COLOR_DESC { get; private set; }
+                public string CSV_COLOR_NRF { get; private set; }
+                public string CSV_SIZESCALE_CODE { get; private set; }
+                public string CSV_WHOLESALE_PRICE_STR { get; private set; }
+                public string CSV_RETAIL_PRICE_STR { get; private set; }
+                public string CSV_COST_STR { get; private set; }
+                public string CSV_PACKAGING { get; private set; }
+                public string CSV_WEIGHT_STR { get; private set; }
+                public string CSV_STATUS { get; private set; }
+ 
+                public decimal CSV_WHOLESALE_PRICE { get; private set; }
+                public decimal CSV_RETAIL_PRICE { get; private set; }
+                public decimal CSV_COST { get; private set; }
+                public decimal CSV_WEIGHT { get; private set; }
+ 
+                public string NEW_STYLE_CODE { get; private set; }
+                public string NEW_STYLE_DESC { get; private set; }
+                public string NEW_COLOR_CODE { get; private set; }
+                public string NEW_COLOR_DESC { get; private set; }
+                public string NEW_COLOR_NRF { get; private set; }
+                public string NEW_STATUS { get; private set; }
+ 
+                public string CheckInvalidFileFormat(System.Data.DataTable dt)
+                {
+                    if (dt.Columns.Count > 0)
+                    {
+                        System.Data.DataColumn dc = dt.Columns[0];
+                        if (dc.ColumnName.EndsWith(colId, StringComparison.OrdinalIgnoreCase))
+                            colId = dc.ColumnName;
+                    }
+ 
+                    colList = new List<string> { colId, colStyleDiv, colSeasonCode, colSeasonDesc, colStyleDesc, colStyleNum, colColorCode, colColorDesc, colColorNRF, colSizeScale, colWholesalePrice, colRetailPrice, colEstCost, colPackaging, colWeight, colStatus };
+ 
+                    string InvalidFileFormatMessage = "";
+                    if (dt.Columns.Count == colList.Count)
+                    {
+                        for (int i = 0; i < dt.Columns.Count; i++)
+                        {
+                            System.Data.DataColumn dc = dt.Columns[i];
+                            if (!dc.ColumnName.Equals(colList[i], StringComparison.OrdinalIgnoreCase))
+                            {
+                                InvalidFileFormatMessage = string.Format("Invalid Column.  Expecting {0}, Found {1}", colList[i], dc.ColumnName);
+                                break;
+                            }
+                        }
+                    }
+                    else
+                        InvalidFileFormatMessage = string.Format("Invalid Column Count.  Expecting {0}, Found {1}", colList.Count, dt.Columns.Count); ;
+                    return InvalidFileFormatMessage;
+                }
+ 
+                public void LoadData(System.Data.DataRow dr, int i)
+                {
+                    ROW_INDEX = i + 2;
+                    CSV_ID = dr[colId].ToString().Trim();
+                    CSV_STDIV_CODE = dr[colStyleDiv].ToString().Trim();
+                    CSV_SEASON_CODE = dr[colSeasonCode].ToString().Trim();
+                    CSV_SEASON_DESC = dr[colSeasonDesc].ToString().Trim();
+                    CSV_STYLE_DESC = dr[colStyleDesc].ToString().Trim();
+                    CSV_STYLE_NUM = dr[colStyleNum].ToString().Trim();
+                    CSV_COLOR_CODE = dr[colColorCode].ToString().Trim();
+                    CSV_COLOR_DESC = dr[colColorDesc].ToString().Trim();
+                    CSV_COLOR_NRF = dr[colColorNRF].ToString().Trim();
+                    CSV_SIZESCALE_CODE = dr[colSizeScale].ToString().Trim();
+                    CSV_WHOLESALE_PRICE_STR = dr[colWholesalePrice].ToString().Trim();
+                    CSV_RETAIL_PRICE_STR = dr[colRetailPrice].ToString().Trim();
+                    CSV_COST_STR = dr[colEstCost].ToString().Trim();
+                    CSV_PACKAGING = dr[colPackaging].ToString().Trim();
+                    CSV_WEIGHT_STR = dr[colWeight].ToString().Trim();
+                    CSV_STATUS = dr[colStatus].ToString().Trim();
+ 
+                    CSV_WHOLESALE_PRICE = ParseDecimalStr(CSV_WHOLESALE_PRICE_STR);
+                    CSV_RETAIL_PRICE = ParseDecimalStr(CSV_RETAIL_PRICE_STR);
+                    CSV_COST = ParseDecimalStr(CSV_COST_STR);
+                    CSV_WEIGHT = ParseDecimalStr(CSV_WEIGHT_STR);
+ 
+                    NEW_STYLE_CODE = CSV_COLOR_CODE;
+                    NEW_STYLE_DESC = (CSV_STYLE_DESC + " " + CSV_COLOR_DESC).Trim();
+ 
+                    string[] arr = CSV_COLOR_CODE.Split(new char[] { '-' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (arr.Length > 1)
+                        NEW_COLOR_CODE = arr[arr.Length - 1].Trim();
+                    else
+                        NEW_COLOR_CODE = "";
+ 
+                    NEW_COLOR_DESC = CSV_COLOR_DESC;
+ 
+                    string nrfColor = "000" + CSV_COLOR_NRF;
+                    nrfColor = nrfColor.Substring(nrfColor.Length - 3);
+                    if (!nrfColor.Equals("000", StringComparison.OrdinalIgnoreCase))
+                        NEW_COLOR_NRF = nrfColor;
+                    else
+                        NEW_COLOR_NRF = "";
+ 
+                    NEW_STATUS = CSV_STATUS.Equals("false", StringComparison.OrdinalIgnoreCase) ? "In Active" : "Active";
+                }
+ 
+                private static decimal ParseDecimalStr(string str)
+                {
+                    decimal value;
+                    decimal.TryParse(str, out value);
+                    return value;
+                }
+            }
+        }
+ 
+        internal static string CoreProcessCSV(long currentUserId, string guidStr, string clientCSVFileName, string serverCSVFileName)
+        {
+            StringBuilder s = new StringBuilder();
+ 
+            s.Append("DECLARE @CLIENT_FILE_NAME nvarchar(300) ");
+            s.Append("DECLARE @SERVER_FILE_NAME nvarchar(300) ");
+            s.Append("DECLARE @IMPORT_GUID nvarchar(50) ");
+            s.Append("SET @CLIENT_FILE_NAME = '").Append(clientCSVFileName.Replace("'", "''")).Append("' ");
+            s.Append("SET @SERVER_FILE_NAME = '").Append(serverCSVFileName.Replace("'", "''")).Append("' ");
+            s.Append("SET @IMPORT_GUID = '").Append(guidStr.Replace("'", "''")).Append("' ");
+ 
+            s.Append("DECLARE @returnCode int ");
+            s.Append("EXEC @returnCode = sp_getapplock  ");
+            s.Append("@Resource = 'StyleListImportStyle' ");
+            s.Append(", @LockMode = 'Exclusive' ");
+            s.Append(", @LockOwner = 'Transaction' ");
+            s.Append(", @LockTimeout = 60000 ");
+ 
+            s.Append(" DECLARE @userId int, @createDate datetime, @utcCreateDate datetime ");
+            s.Append(" SET @userId = ").Append(currentUserId).Append(" ");
+            s.Append(" SET @createDate = GETDATE() ");
+            s.Append(" SET @utcCreateDate = GETUTCDATE() ");
+ 
+            s.Append("IF object_id('tempdb..#csvdata') IS NOT NULL BEGIN DROP TABLE #csvdata END ");
+ 
+            s.Append("CREATE TABLE #csvdata ");
+            s.Append("( ");
+            s.Append("     ROW_INDEX int, ");
+            s.Append("     CSV_ID nvarchar(50), ");
+            s.Append("     CSV_STDIV_CODE nvarchar(50), ");
+            s.Append("     CSV_SEASON_CODE nvarchar(50), CSV_SEASON_DESC nvarchar(300), ");
+            s.Append("     CSV_STYLE_DESC nvarchar(300), CSV_STYLE_NUM nvarchar(50), ");
+            s.Append("     CSV_COLOR_CODE nvarchar(50), CSV_COLOR_DESC nvarchar(300), CSV_COLOR_NRF nvarchar(50), ");
+            s.Append("     CSV_SIZESCALE_CODE nvarchar(50), ");
+            s.Append("     CSV_WHOLESALE_PRICE float, CSV_RETAIL_PRICE float, CSV_COST float, ");
+            s.Append("     CSV_PACKAGING nvarchar(50), CSV_WEIGHT float, ");
+            s.Append("     CSV_STATUS nvarchar(50), ");
+            s.Append("     NEW_STYLE_CODE nvarchar(50), NEW_STYLE_DESC nvarchar(300), ");
+            s.Append("     NEW_COLOR_CODE nvarchar(50), NEW_COLOR_DESC nvarchar(300), NEW_COLOR_NRF nvarchar(50), ");
+            s.Append("     NEW_STATUS nvarchar(50), ");
+            s.Append("  OLD_STDIV_ID int, OLD_SEASON_ID int, ");
+            s.Append("  OLD_STYLE_CODE nvarchar(50), OLD_STYLE_DESC nvarchar(300), ");
+            s.Append("  OLD_COLOR_ID int, OLD_SIZESCALE_ID int, ");
+            s.Append("  OLD_WHOLESALE_PRICE float, OLD_RETAIL_PRICE float, OLD_COST float, ");
+            s.Append("  OLD_WEIGHT float, ");
+            s.Append("     OLD_STATUS nvarchar(50), ");
+            s.Append("     STYLE_ID int, STDIV_ID int, SEASON_ID int, SIZESCALE_ID int, COLOR_ID int, IS_OLD_STYLE int, NEW_STYLE_CREATED int, ");
+            s.Append("     IS_INVALID int, IS_DUPLICATE int, DUPLICATE_R int, IMPORT_NOTES nvarchar(1000) ");
+            s.Append(") ");
+ 
+            int numFileRows = 0;
+            int numFileCols = 0;
+            int invalidFileFormat = 0;
+            string invalidFileFormatMessage = "";
+ 
+            System.Data.DataTable dt = ReadServerFile(guidStr, serverCSVFileName);
+            if (dt != null)
+            {
+                numFileRows = dt.Rows.Count;
+                numFileCols = dt.Columns.Count;
+ 
+                CSVDataProcessor proc = new CSVDataProcessor();
+                proc.ProcessData(dt);
+                invalidFileFormat = proc.InvalidFileFormat;
+                invalidFileFormatMessage = proc.InvalidFileFormatMessage;
+                s.Append(proc.Sql);
+            }
+ 
+            s.Append("DECLARE @NUM_FILE_ROWS int, @NUM_FILE_COLS int ");
+            s.Append("SET @NUM_FILE_ROWS = ").Append(numFileRows).Append(" ");
+            s.Append("SET @NUM_FILE_COLS = ").Append(numFileCols).Append(" ");
+ 
+            s.Append("DECLARE @INVALID_FILE_FORMAT int ");
+            s.Append("SET @INVALID_FILE_FORMAT = ").Append(invalidFileFormat).Append(" ");
+ 
+            s.Append("DECLARE @NUM_LINES_READ int ");
+            s.Append("SET @NUM_LINES_READ = (SELECT COUNT(*) FROM #csvdata) ");
+ 
+ 
+            s.Append(GetImportStyleSql());
+ 
+ 
+            s.Append("DECLARE @NUM_LINES_INVALID int, @NUM_STYLES_CREATED int ");
+            s.Append("SET @NUM_LINES_INVALID = (SELECT COUNT(*) FROM #csvdata WHERE IS_INVALID = 1) ");
+            s.Append("SET @NUM_STYLES_CREATED = (SELECT COUNT(*) FROM #csvdata WHERE NEW_STYLE_CREATED = 1) ");
+ 
+            s.Append("DECLARE @newline varchar(10) ");
+            s.Append("SET @newline = char(13) + char(10) ");
+ 
+            s.Append("DECLARE @IMPORT_FEEDBACK nvarchar(1000) ");
+            s.Append("SET @IMPORT_FEEDBACK =  ");
+            s.Append("CAST(@NUM_STYLES_CREATED AS varchar) + ' Style' + CASE WHEN @NUM_STYLES_CREATED = 1 THEN '' ELSE 's' END + ' Imported' ");
+ 
+            s.Append("DECLARE @IMPORT_NOTES nvarchar(MAX) ");
+            if (invalidFileFormat == 1)
+            {
+                s.Append("SET @IMPORT_NOTES = 'Invalid File Format.' ");
+                if (invalidFileFormatMessage.Length > 0)
+                    s.Append("+ '  ' + '").Append(invalidFileFormatMessage.Replace("'", "''")).Append("' ");
+            }
+            else
+                s.Append("SET @IMPORT_NOTES = '' ");
+ 
+            s.Append("DECLARE @DISPLAY_MESSAGE nvarchar(MAX) ");
+            s.Append("SET @DISPLAY_MESSAGE = @IMPORT_FEEDBACK ");
+            if (invalidFileFormat == 1)
+                s.Append("+ @newline + @newline + @IMPORT_NOTES ");
+ 
+ 
+            s.Append("DECLARE @IMPORTHEADER_ID int ");
+ 
+            s.Append("INSERT INTO [dbo].[taps_log_stylecsvimportheader] ");
+            s.Append("([CLIENT_FILE_NAME] ");
+            s.Append(",[SERVER_FILE_NAME] ");
+            s.Append(",[IMPORT_GUID] ");
+            s.Append(",[IMPORT_FEEDBACK] ");
+            s.Append(",[IMPORT_NOTES] ");
+            s.Append(",[INVALID_FILE_FORMAT] ");
+            s.Append(",[NUM_FILE_ROWS] ");
+            s.Append(",[NUM_FILE_COLS] ");
+            s.Append(",[NUM_LINES_READ] ");
+            s.Append(",[NUM_LINES_INVALID] ");
+            s.Append(",[NUM_STYLES_CREATED] ");
+            s.Append(",[DELETED] ");
+            s.Append(",[CREATED_BY] ");
+            s.Append(",[CREATE_DATE] ");
+            s.Append(",[MODIFIED_BY] ");
+            s.Append(",[MODIFIED_DATE] ");
+            s.Append(",[UTC_CREATE_DATE] ");
+            s.Append(",[UTC_MODIFIED_DATE]) ");
+            s.Append("SELECT ");
+            s.Append("@CLIENT_FILE_NAME ");
+            s.Append(",@SERVER_FILE_NAME ");
+            s.Append(",@IMPORT_GUID ");
+            s.Append(",@IMPORT_FEEDBACK ");
+            s.Append(",@IMPORT_NOTES ");
+            s.Append(",@INVALID_FILE_FORMAT ");
+            s.Append(",@NUM_FILE_ROWS ");
+            s.Append(",@NUM_FILE_COLS ");
+            s.Append(",@NUM_LINES_READ ");
+            s.Append(",@NUM_LINES_INVALID ");
+            s.Append(",@NUM_STYLES_CREATED ");
+            s.Append(",0 AS DELETED ");
+            s.Append(",@userId AS CREATED_BY ");
+            s.Append(",@createDate AS CREATE_DATE ");
+            s.Append(",0 AS MODIFIED_BY ");
+            s.Append(",NULL AS MODIFIED_DATE ");
+            s.Append(",@utcCreateDate AS UTC_CREATE_DATE ");
+            s.Append(",NULL AS UTC_MODIFIED_DATE ");
+ 
+            s.Append("SET @IMPORTHEADER_ID = SCOPE_IDENTITY() ");
+ 
+ 
+            s.Append("INSERT INTO [dbo].[taps_log_stylecsvimportdet] ");
+            s.Append("([IMPORTHEADER_ID] ");
+            s.Append(",[ROW_INDEX] ");
+            s.Append(",[CSV_ID] ");
+            s.Append(",[CSV_STDIV_CODE] ");
+            s.Append(",[CSV_SEASON_CODE] ");
+            s.Append(",[CSV_SEASON_DESC] ");
+            s.Append(",[CSV_STYLE_DESC] ");
+            s.Append(",[CSV_STYLE_NUM] ");
+            s.Append(",[CSV_COLOR_CODE] ");
+            s.Append(",[CSV_COLOR_DESC] ");
+            s.Append(",[CSV_COLOR_NRF] ");
+            s.Append(",[CSV_SIZESCALE_CODE] ");
+            s.Append(",[CSV_WHOLESALE_PRICE] ");
+            s.Append(",[CSV_RETAIL_PRICE] ");
+            s.Append(",[CSV_COST] ");
+            s.Append(",[CSV_PACKAGING] ");
+            s.Append(",[CSV_WEIGHT] ");
+            s.Append(",[CSV_STATUS] ");
+            s.Append(",[NEW_STYLE_CODE] ");
+            s.Append(",[NEW_STYLE_DESC] ");
+            s.Append(",[NEW_COLOR_CODE] ");
+            s.Append(",[NEW_COLOR_DESC] ");
+            s.Append(",[NEW_COLOR_NRF] ");
+            s.Append(",[NEW_STATUS] ");
+            s.Append(",[OLD_STDIV_ID], [OLD_SEASON_ID] ");
+            s.Append(",[OLD_STYLE_CODE] , [OLD_STYLE_DESC] ");
+            s.Append(",[OLD_COLOR_ID], [OLD_SIZESCALE_ID] ");
+            s.Append(",[OLD_WHOLESALE_PRICE], [OLD_RETAIL_PRICE], [OLD_COST] ");
+            s.Append(",[OLD_WEIGHT] ");
+            s.Append(",[OLD_STATUS] ");
+            s.Append(",[STYLE_ID] ");
+            s.Append(",[STDIV_ID] ");
+            s.Append(",[SEASON_ID] ");
+            s.Append(",[SIZESCALE_ID] ");
+            s.Append(",[COLOR_ID] ");
+            s.Append(",[IS_OLD_STYLE] ");
+            s.Append(",[NEW_STYLE_CREATED] ");
+            s.Append(",[IS_INVALID] ");
+            s.Append(",[IS_DUPLICATE] ");
+            s.Append(",[DUPLICATE_R] ");
+            s.Append(",[IMPORT_NOTES] ");
+            s.Append(",[DELETED] ");
+            s.Append(",[CREATED_BY] ");
+            s.Append(",[CREATE_DATE] ");
+            s.Append(",[MODIFIED_BY] ");
+            s.Append(",[MODIFIED_DATE] ");
+            s.Append(",[UTC_CREATE_DATE] ");
+            s.Append(",[UTC_MODIFIED_DATE]) ");
+            s.Append("SELECT ");
+            s.Append("@IMPORTHEADER_ID ");
+            s.Append(", m.ROW_INDEX ");
+            s.Append(", m.CSV_ID ");
+            s.Append(", m.CSV_STDIV_CODE ");
+            s.Append(", m.CSV_SEASON_CODE, m.CSV_SEASON_DESC ");
+            s.Append(", m.CSV_STYLE_DESC, m.CSV_STYLE_NUM ");
+            s.Append(", m.CSV_COLOR_CODE, m.CSV_COLOR_DESC, m.CSV_COLOR_NRF ");
+            s.Append(", m.CSV_SIZESCALE_CODE ");
+            s.Append(", m.CSV_WHOLESALE_PRICE, m.CSV_RETAIL_PRICE, m.CSV_COST ");
+            s.Append(", m.CSV_PACKAGING, m.CSV_WEIGHT ");
+            s.Append(", m.CSV_STATUS ");
+            s.Append(", m.NEW_STYLE_CODE, m.NEW_STYLE_DESC ");
+            s.Append(", m.NEW_COLOR_CODE, m.NEW_COLOR_DESC, m.NEW_COLOR_NRF ");
+            s.Append(", m.NEW_STATUS ");
+            s.Append(", m.OLD_STDIV_ID, m.OLD_SEASON_ID ");
+            s.Append(", m.OLD_STYLE_CODE, m.OLD_STYLE_DESC ");
+            s.Append(", m.OLD_COLOR_ID, m.OLD_SIZESCALE_ID ");
+            s.Append(", m.OLD_WHOLESALE_PRICE, m.OLD_RETAIL_PRICE, m.OLD_COST ");
+            s.Append(", m.OLD_WEIGHT ");
+            s.Append(", m.OLD_STATUS ");
+            s.Append(", m.STYLE_ID, m.STDIV_ID, m.SEASON_ID, m.SIZESCALE_ID, m.COLOR_ID, m.IS_OLD_STYLE, m.NEW_STYLE_CREATED ");
+            s.Append(", m.IS_INVALID, m.IS_DUPLICATE, m.DUPLICATE_R, m.IMPORT_NOTES ");
+            s.Append(",0 AS DELETED ");
+            s.Append(",@userId AS CREATED_BY ");
+            s.Append(",@createDate AS CREATE_DATE ");
+            s.Append(",0 AS MODIFIED_BY ");
+            s.Append(",NULL AS MODIFIED_DATE ");
+            s.Append(",@utcCreateDate AS UTC_CREATE_DATE ");
+            s.Append(",NULL AS UTC_MODIFIED_DATE ");
+            s.Append("FROM #csvdata AS m ");
+            s.Append("ORDER BY m.ROW_INDEX ");
+ 
+ 
+            s.Append("SELECT @DISPLAY_MESSAGE AS [DISPLAY_MESSAGE] ");
+ 
+ 
+            s.Append("SELECT ");
+            s.Append("CASE WHEN m.ROW_INDEX <= @row THEN m.ROW_INDEX END AS ROW_INDEX,  ");
+            s.Append("m.CSV_STDIV_CODE,  ");
+            s.Append("m.CSV_SEASON_CODE, m.CSV_SEASON_DESC,  ");
+            s.Append("m.CSV_STYLE_DESC, m.CSV_STYLE_NUM,  ");
+            s.Append("m.NEW_STYLE_CODE AS CSV_COLOR_CODE, m.CSV_COLOR_DESC, m.CSV_COLOR_NRF,  ");
+            s.Append("m.CSV_SIZESCALE_CODE,  ");
+            s.Append("m.IMPORT_NOTES ");
+            s.Append("FROM #csvdata AS m ");
+            //s.Append("WHERE m.IS_INVALID = 1 ");
+            s.Append("WHERE m.IMPORT_NOTES <> '' AND m.IMPORT_NOTES <> 'Style Already Exists' ");
+            s.Append("ORDER BY m.ROW_INDEX ");
+ 
+ 
+            s.Append("IF object_id('tempdb..#csvdata') IS NOT NULL BEGIN DROP TABLE #csvdata END ");
+ 
+            string sql = s.ToString();
+            return sql;
+        }
+ 
+        private static string GetImportStyleSql()
+        {
+            StringBuilder s = new StringBuilder();
+ 
+            s.Append("UPDATE #csvdata ");
+            s.Append("SET STYLE_ID = 0, STDIV_ID = 0, SEASON_ID = 0, SIZESCALE_ID = 0, COLOR_ID = 0, IS_OLD_STYLE = 0, NEW_STYLE_CREATED = 0,  ");
+            s.Append("IS_INVALID = 0, IS_DUPLICATE = 0, DUPLICATE_R = 0, IMPORT_NOTES = '' ");
+ 
+            //Initialize OLD_ columns
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.OLD_SIZESCALE_ID = 0,t1.OLD_COLOR_ID = 0, t1.OLD_STDIV_ID = 0, t1.OLD_SEASON_ID = 0, t1.OLD_STYLE_DESC = '', t1.OLD_WHOLESALE_PRICE = 0, t1.OLD_RETAIL_PRICE = 0, ");
+            s.Append(" t1.OLD_COST = 0, t1.OLD_WEIGHT = 0, t1.OLD_STATUS = '', t1.OLD_STYLE_CODE = '' ");
+            s.Append(" FROM #csvdata AS t1");
+ 
+            s.Append(" DECLARE @row int ");
+            s.Append(" SELECT @row =  MAX(ROW_INDEX) FROM #csvdata ");
+ 
+            //Find code then match ID's
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.SEASON_ID = seas.SEASON_ID ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_season AS seas ON t1.CSV_SEASON_CODE = seas.CODE AND seas.DELETED = 0");
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.STDIV_ID = stdiv.STDIV_ID ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_co_style_division AS stdiv ON t1.CSV_STDIV_CODE = stdiv.CODE AND stdiv.DELETED = 0");
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.SIZESCALE_ID = size.SIZESCALE_ID ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_sizescale AS size ON t1.CSV_SIZESCALE_CODE = size.CODE AND size.DELETED = 0");
+ 
+           s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.COLOR_ID = color.COLOR_ID ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_color AS color ON t1.NEW_COLOR_CODE = color.CODE AND color.DELETED = 0");
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.NEW_COLOR_NRF = color.NRF_CODE ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_color AS color ON t1.COLOR_ID = color.COLOR_ID AND color.DELETED = 0");
+            s.Append(" WHERE t1.NEW_COLOR_NRF = '' AND color.NRF_CODE <> '' AND color.NRF_CODE <> '___' ");
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.NEW_COLOR_NRF = color.NRF_CODE ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_color AS color ON t1.NEW_COLOR_DESC = color.DESCRIPTION AND color.DELETED = 0 ");
+            s.Append(" WHERE t1.NEW_COLOR_NRF = '' AND color.NRF_CODE <> '' AND color.NRF_CODE <> '___' ");
+           
+ 
+            // If DNE insert new rows in tables
+            s.Append(" INSERT INTO [dbo].[taps_st_season] ");
+            s.Append(" ([CODE] ");
+            s.Append(" ,[DESCRIPTION] ");
+            s.Append(" ,[CREATED_DATE] ");
+            s.Append(" ,[LAST_MODIFIED_BY] ");
+            s.Append(" ,[LAST_MODIFIED_DATE] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[STATUS] ");
+            s.Append(" ,[CREATE_DATE] ");
+            s.Append(" ,[CREATED_BY] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE]) ");
+ 
+            s.Append(" SELECT ");
+            s.Append(" UPPER(CSV_SEASON_CODE) ");
+           s.Append(" ,UPPER(MAX(CSV_SEASON_DESC)) ");
+            s.Append(" ,NULL,NULL,NULL ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,1 AS STATUS ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@userId ");
+            s.Append(" ,0 AS MODIFIED_BY ");
+            s.Append(" ,@createdate  ");
+            s.Append(" FROM #csvdata ");
+            s.Append(" WHERE SEASON_ID = 0 ");
+            s.Append(" AND CSV_SEASON_CODE <> '' ");
+            s.Append(" GROUP BY CSV_SEASON_CODE ");
+            s.Append(" ORDER BY CSV_SEASON_CODE ");
+ 
+            s.Append(" INSERT INTO [dbo].[taps_co_style_division] ");
+            s.Append(" ([COMP_ID] ");
+            s.Append(" ,[CODE] ");
+           s.Append(" ,[NAME] ");
+            s.Append(" ,[NOTES] ");
+            s.Append(" ,[DIVISION_ID] ");
+            s.Append(" ,[CREATED_DATE] ");
+            s.Append(" ,[LAST_MODIFIED_BY] ");
+            s.Append(" ,[LAST_MODIFIED_DATE] ");
+            s.Append(" ,[CREATE_DATE] ");
+            s.Append(" ,[CREATED_BY] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[STDIV_GROUP]) ");
+ 
+            s.Append(" SELECT ");
+            s.Append(" -1 AS COMP_ID ");
+            s.Append(" ,UPPER(CSV_STDIV_CODE) AS CODE ");
+            s.Append(" ,UPPER(CSV_STDIV_CODE) AS NAME ");
+            s.Append(" ,'' AS NOTES ");
+            s.Append(" ,0 AS DIVISION_ID ");
+            s.Append(" ,NULL ");
+            s.Append(" ,NULL ");
+            s.Append(" ,NULL,@createdate,@userId  ");
+            s.Append(" ,0 AS MODIFIED_BY ");
+            s.Append(" ,@createdate,0,'' ");
+           s.Append(" FROM #csvdata ");
+            s.Append(" WHERE STDIV_ID = 0 ");
+            s.Append(" AND CSV_STDIV_CODE <> '' ");
+            s.Append(" GROUP BY CSV_STDIV_CODE ");
+            s.Append(" ORDER BY CSV_STDIV_CODE ");
+ 
+            s.Append(" INSERT INTO [dbo].[taps_st_color] ");
+            s.Append(" ([CODE] ");
+            s.Append(" ,[NRF_CODE] ");
+            s.Append(" ,[GROUPS] ");
+            s.Append(" ,[DESCRIPTION] ");
+            s.Append(" ,[CREATED_DATE] ");
+            s.Append(" ,[LAST_MODIFIED_BY] ");
+            s.Append(" ,[LAST_MODIFIED_DATE] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[CREATE_DATE] ");
+            s.Append(" ,[CREATED_BY] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[INACTIVE]) ");
+ 
+            s.Append(" SELECT ");
+            s.Append(" UPPER(NEW_COLOR_CODE) ");
+            s.Append(" ,MAX(NEW_COLOR_NRF) ");
+            s.Append(" ,'' AS GROUPS ");
+            s.Append(" ,UPPER(MAX(NEW_COLOR_DESC)) ");
+            s.Append(" ,NULL,NULL,NULL ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@userId  ");
+            s.Append(" ,0 AS MODIFIED_BY ");
+            s.Append(" ,@createdate  ");
+            s.Append(" ,0 AS INACTIVE ");
+            s.Append(" FROM #csvdata ");
+            s.Append(" WHERE COLOR_ID = 0 ");
+            s.Append(" AND NEW_COLOR_CODE <> '' ");
+            s.Append(" GROUP BY NEW_COLOR_CODE ");
+            s.Append(" ORDER BY NEW_COLOR_CODE ");
+ 
+            //Update temp table with newly created rows
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.SEASON_ID = seas.SEASON_ID ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_season AS seas ON t1.CSV_SEASON_CODE = seas.CODE AND seas.DELETED = 0");
+            s.Append(" WHERE t1.SEASON_ID = 0 ");
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.STDIV_ID = stdiv.STDIV_ID ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_co_style_division AS stdiv ON t1.CSV_STDIV_CODE = stdiv.CODE AND stdiv.DELETED = 0");
+            s.Append(" WHERE t1.STDIV_ID = 0 ");
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.COLOR_ID = color.COLOR_ID ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_color AS color ON t1.NEW_COLOR_CODE = color.CODE AND color.DELETED = 0 ");
+            s.Append(" WHERE t1.COLOR_ID = 0 ");
+ 
+ 
+            // SET Appropriate columns as deleted
+            s.Append(" UPDATE l ");
+            s.Append(" SET DELETED = 1, MODIFIED_BY = @userId, MODIFIED_DATE = @createdate, UTC_MODIFIED_DATE = @utcCreatedate ");
+            s.Append(" FROM taps_st_centricstylelink AS l ");
+            s.Append(" LEFT OUTER JOIN taps_st_style AS sty ON l.STYLE_ID = sty.STYLE_ID ");
+            s.Append(" WHERE l.DELETED = 0 AND (sty.STYLE_ID IS NULL OR sty.DELETED <> 0) ");
+ 
+            // If it exists match the IDs
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.STYLE_ID = sty.STYLE_ID, t1.IS_OLD_STYLE = 1, t1.IMPORT_NOTES = 'Style Already Exists' ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.NEW_STYLE_CODE = sty.CODE AND sty.DELETED = 0 ");
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.STYLE_ID = l.STYLE_ID, t1.IS_OLD_STYLE = 1, t1.IMPORT_NOTES = 'Style Already Exists' ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_centricstylelink AS l ON t1.CSV_ID = l.CENTRIC_NUM AND l.DELETED = 0 ");
+ 
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET DUPLICATE_R = r.R ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN ");
+            s.Append(" ( ");
+            s.Append("  SELECT ROW_INDEX, ROW_NUMBER() OVER (PARTITION BY NEW_STYLE_CODE ORDER BY ROW_INDEX) AS R ");
+            s.Append("  FROM #csvdata ");
+            s.Append(" ) AS r ON t1.ROW_INDEX = r.ROW_INDEX ");
+ 
+            s.Append(" UPDATE #csvdata  ");
+            s.Append(" SET IS_DUPLICATE = 1  ");
+            s.Append(" WHERE DUPLICATE_R > 1 ");
+ 
+            // check if invalid
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.IMPORT_NOTES = 'Duplicate of Row ' + CAST(f.ROW_INDEX AS varchar), t1.IS_INVALID = 1 ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN ");
+            s.Append(" ( ");
+            s.Append("  SELECT ROW_INDEX, NEW_STYLE_CODE, DUPLICATE_R ");
+            s.Append("  FROM #csvdata ");
+            s.Append(" ) AS f ON t1.NEW_STYLE_CODE = f.NEW_STYLE_CODE AND f.DUPLICATE_R = 1 ");
+            s.Append(" WHERE t1.IS_INVALID = 0 AND t1.IS_DUPLICATE = 1 ");
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.IMPORT_NOTES = 'Duplicate of Row ' + CAST(f.ROW_INDEX AS varchar), t1.IS_INVALID = 1, t1.IS_DUPLICATE = 1 ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN ");
+            s.Append(" ( ");
+            s.Append("  SELECT ROW_INDEX, NEW_STYLE_CODE, DUPLICATE_R ");
+            s.Append("  FROM #csvdata ");
+            s.Append(" ) AS f ON t1.NEW_STYLE_CODE = f.NEW_STYLE_CODE AND f.DUPLICATE_R = 2 ");
+            s.Append(" WHERE t1.IS_INVALID = 0 AND t1.DUPLICATE_R = 1 ");
+ 
+ 
+            s.Append(" UPDATE #csvdata ");
+            s.Append(" SET IMPORT_NOTES = 'Missing Style Code', IS_INVALID = 1 ");
+            s.Append(" WHERE IS_INVALID = 0 AND NEW_STYLE_CODE = '' AND IS_OLD_STYLE = 0 AND IMPORT_NOTES = '' ");
+ 
+            s.Append(" UPDATE #csvdata ");
+            s.Append(" SET IMPORT_NOTES = 'Missing Color Code', IS_INVALID = 1 ");
+            s.Append(" WHERE IS_INVALID = 0 AND NEW_COLOR_CODE = '' AND IS_OLD_STYLE = 0 AND IMPORT_NOTES = '' ");
+ 
+            s.Append(" UPDATE #csvdata ");
+            s.Append(" SET IMPORT_NOTES = 'Size Scale Not Found', IS_INVALID = 1 ");
+            s.Append(" WHERE IS_INVALID = 0 AND SIZESCALE_ID = 0 AND IS_OLD_STYLE = 0 AND IMPORT_NOTES = '' ");
+ 
+            s.Append(" UPDATE #csvdata ");
+            s.Append(" SET IMPORT_NOTES = 'Missing NRF Color' ");
+            s.Append(" WHERE IS_INVALID = 0 AND NEW_COLOR_NRF = '' AND IS_OLD_STYLE = 0 AND IMPORT_NOTES = '' ");
+ 
+            // create pb styles
+            s.Append(" INSERT INTO #csvdata ( ");
+            s.Append(" ROW_INDEX, ");
+            s.Append(" CSV_ID, ");
+            s.Append(" CSV_STDIV_CODE, ");
+            s.Append(" CSV_SEASON_CODE, CSV_SEASON_DESC, ");
+            s.Append(" CSV_STYLE_DESC, CSV_STYLE_NUM, ");
+            s.Append(" CSV_COLOR_CODE, CSV_COLOR_DESC, CSV_COLOR_NRF, ");
+            s.Append(" CSV_SIZESCALE_CODE, ");
+            s.Append(" CSV_WHOLESALE_PRICE, CSV_RETAIL_PRICE, CSV_COST, ");
+            s.Append(" CSV_PACKAGING, CSV_WEIGHT, ");
+            s.Append(" CSV_STATUS, ");
+            s.Append(" NEW_STYLE_CODE , NEW_STYLE_DESC, ");
+            s.Append(" NEW_COLOR_CODE, NEW_COLOR_DESC, NEW_COLOR_NRF, ");
+            s.Append(" NEW_STATUS, ");
+            s.Append(" OLD_STDIV_ID, OLD_SEASON_ID, ");
+            s.Append(" OLD_STYLE_CODE , OLD_STYLE_DESC, ");
+            s.Append(" OLD_COLOR_ID, OLD_SIZESCALE_ID, ");
+            s.Append(" OLD_WHOLESALE_PRICE, OLD_RETAIL_PRICE, OLD_COST, ");
+            s.Append(" OLD_WEIGHT, ");
+            s.Append(" OLD_STATUS, ");
+            s.Append(" STYLE_ID, STDIV_ID, SEASON_ID, SIZESCALE_ID, COLOR_ID, IS_OLD_STYLE, NEW_STYLE_CREATED, ");
+            s.Append(" IS_INVALID, IS_DUPLICATE, DUPLICATE_R, IMPORT_NOTES )");
+ 
+            s.Append(" SELECT ");
+            s.Append(" @row + ROW_NUMBER() OVER (ORDER BY ROW_INDEX) AS ROW_INDEX, ");
+            s.Append(" CSV_ID + '-PB', ");
+            s.Append(" CSV_STDIV_CODE, ");
+            s.Append(" CSV_SEASON_CODE, CSV_SEASON_DESC, ");
+            s.Append(" CSV_STYLE_DESC, CSV_STYLE_NUM, ");
+            s.Append(" CSV_COLOR_CODE, CSV_COLOR_DESC, CSV_COLOR_NRF, ");
+            s.Append(" CSV_SIZESCALE_CODE, ");
+            s.Append(" CSV_WHOLESALE_PRICE, CSV_RETAIL_PRICE, CSV_COST, ");
+            s.Append(" CSV_PACKAGING, CSV_WEIGHT, ");
+            s.Append(" CSV_STATUS, ");
+            s.Append(" NEW_STYLE_CODE + '-PB', NEW_STYLE_DESC, ");
+            s.Append(" NEW_COLOR_CODE, NEW_COLOR_DESC, NEW_COLOR_NRF, ");
+            s.Append(" NEW_STATUS, ");
+            s.Append(" OLD_STDIV_ID, OLD_SEASON_ID, ");
+            s.Append(" OLD_STYLE_CODE , OLD_STYLE_DESC, ");
+            s.Append(" OLD_COLOR_ID, OLD_SIZESCALE_ID, ");
+            s.Append(" OLD_WHOLESALE_PRICE, OLD_RETAIL_PRICE, OLD_COST, ");
+            s.Append(" OLD_WEIGHT, ");
+            s.Append(" OLD_STATUS, ");
+            s.Append(" 0 AS STYLE_ID, STDIV_ID, SEASON_ID, SIZESCALE_ID, COLOR_ID, 0 AS IS_OLD_STYLE, NEW_STYLE_CREATED, ");
+            s.Append(" IS_INVALID, IS_DUPLICATE, DUPLICATE_R, '' AS IMPORT_NOTES ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" WHERE t1.CSV_PACKAGING = 'Hang + Polybag' AND t1.IS_INVALID = 0 ");
+ 
+            //Check if PB rows exist in DB
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.STYLE_ID = sty.STYLE_ID, t1.IS_OLD_STYLE = 1, t1.IMPORT_NOTES = 'Style Already Exists' ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.NEW_STYLE_CODE = sty.CODE AND sty.DELETED = 0 ");
+            s.Append(" WHERE t1.IS_DUPLICATE = 0 AND t1.ROW_INDEX > @row ");
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.STYLE_ID = l.STYLE_ID, t1.IS_OLD_STYLE = 1, t1.IMPORT_NOTES = 'Style Already Exists' ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_centricstylelink AS l ON t1.CSV_ID = l.CENTRIC_NUM AND l.DELETED = 0 ");
+            s.Append(" WHERE t1.IS_DUPLICATE = 0 AND t1.ROW_INDEX > @row ");
+ 
+ 
+            s.Append(" UPDATE #csvdata ");
+            s.Append(" SET IMPORT_NOTES = 'Missing NRF Color' ");
+            s.Append(" WHERE IS_INVALID = 0 AND NEW_COLOR_NRF = '' AND IS_OLD_STYLE = 0 AND IMPORT_NOTES = '' AND ROW_INDEX > @row ");
+ 
+ 
+            //INSERT STYLES
+            s.Append(" INSERT INTO [dbo].[taps_st_style] ");
+            s.Append(" ([CODE] ");
+            s.Append(" ,[TYPE] ");
+            s.Append(" ,[SIZESCALE_ID] ");
+            s.Append(" ,[STDIV_ID] ");
+            s.Append(" ,[GROUP_ID] ");
+            s.Append(" ,[CAT_ID] ");
+            s.Append(" ,[DESCRIPTION] ");
+            s.Append(" ,[APPROVE_DATE],[PHASE_OUT_DATE],[LAST_MODIFIEDBY],[LAST_MODIFIEDDATE] ");
+            s.Append(" ,[SEASON_ID] ");
+            s.Append(" ,[STATUS] ");
+            s.Append(" ,[YEAR] ");
+            s.Append(" ,[BODY],[FABRICATION],[PRINT_],[LABEL_],[BLANK_ID],[GROUP_NAME],[COO]  ");
+            s.Append(" ,[COST] ");
+            s.Append(" ,[WHOLESALE_PRICE] ");
+            s.Append(" ,[RETAIL_PRICE] ");
+            s.Append(" ,[MARKER_ID],[PROCUREMENT] ");
+            s.Append(" ,[DELIVERY_DATE] ");
+            s.Append(" ,[MARGIN] ");
+            s.Append(" ,[SUBCATEGORY_ID],[PATTERN],[NOTES],[CURRENT_COSTSHEET],[LAST_CURR_UPDT] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[PHASE_OUT_REASON] ");
+            s.Append(" ,[CREATE_DATE] ");
+            s.Append(" ,[CREATED_BY] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[RAWM_ID],[CARELABEL_ID],[RAWM_ID1],[SEWING_LABEL],[PREPOD_SAMPLE],[SHIP_SAMPLE],[HANGER],[PRICE_TICK],[STYLE_STIC],[FIT_SAMPLE],[NEW_PACKAGE],[OTHER_TAG],[CARE_LABEL],[UPC_STIC],[INLINE_SAMPLE],[HANG_TAG],[ACCESS_NOTES],[PACK_NOTES],[OTHER_INST_NOTES],[DOC_DESC],[SIZE_STIC],[MRF_READY] ,[FREEZE_DATE],[FROZEN_BY],[BOX_QTY],[ITEM_WEIGHT],[FABRICATION_TYPE],[TOTAL_ACTUAL_COST],[PIECES_PER_UNIT],[UNIT_PER_TRAY],[RECEIPT_ID],[RECEIPTDET_ID],[LAST_COST],[CHANGED_DATE],[UNIT_MULTI],[REPLENISHMENT],[RETAIL_PRO_PRICE],[RETAIL_UKLINK_POUNDS],[RETAIL_UKLINK_EUROS],[RETAIL_DEPT_CODE],[FOB_PRICE],[ISAPPROVED],[SUBGROUP],[FINAL_PURCHASE_DATE],[RETAIL_UKLINK_COST],[VENDOR_ID],[RETAIL_DESCRIPTION],[WASHING_CAREINSTR_ID],[BLEACHING_CAREINSTR_ID],[DRYING_CAREINSTR_ID],[IRONING_CAREINSTR_ID],[DRYCLEANING_CAREINSTR_ID],[EXCLUSIVE_OF_DECORATION],[SUBCATEGORY2_ID],[FIT_ID],[CLOSURE_ID],[HTS_CODE],[OUTLET_STYLE],[MARKDOWN_COST],[PACKAGED_STYLE]) ");
+ 
+            s.Append(" SELECT ");
+            s.Append(" UPPER(NEW_STYLE_CODE) ");
+            s.Append(" ,'Imported' ");
+            s.Append(" ,SIZESCALE_ID ");
+            s.Append(" ,STDIV_ID ");
+            s.Append(" ,NULL ");
+            s.Append(" ,0 AS CAT_ID ");
+            s.Append(" ,UPPER(NEW_STYLE_DESC) ");
+            s.Append(" ,NULL,NULL,NULL,NULL ");
+            s.Append(" ,SEASON_ID ");
+            s.Append(" ,NEW_STATUS AS STATUS ");
+            s.Append(" ,YEAR(@createdate) ");
+            s.Append(" ,0 ,0 ,0 ,'' ,0 ,'' ,''  ");
+            s.Append(" ,CSV_COST ");
+            s.Append(" ,CSV_WHOLESALE_PRICE ");
+            s.Append(" ,CSV_RETAIL_PRICE ");
+            s.Append(" ,NULL,NULL ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,dbo.ROUND_TO_EVEN(CASE WHEN CSV_WHOLESALE_PRICE = 0 THEN 0 ELSE (CSV_WHOLESALE_PRICE - CSV_COST) / CSV_WHOLESALE_PRICE * 100.0 END, 7) ");
+            s.Append(" ,0 ,'','' ,0 ,'1900-01-01 00:00:00.000' ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,'' AS PHASE_OUT_REASON ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@userId");
+            s.Append(" ,0 ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,0 ,0 ,NULL,'','' AS PREPOD_SAMPLE,'','','','','','','','','','','','','','','','','YES','1900-01-01 00:00:00.000',0,0,CSV_WEIGHT,'',0,0,0,0,0,0,'',0,0,0,NULL,NULL,'','','','',@createdate,0,0,'',0,0,0,0,0,0,0,0,0,'',0,0,0 ");
+            s.Append(" FROM #csvdata ");
+            s.Append(" WHERE IS_INVALID = 0 AND IS_OLD_STYLE = 0 AND NEW_STYLE_CREATED = 0 ");
+            s.Append(" ORDER BY ROW_INDEX  ");
+ 
+            //CHECK NEW STYLES
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.STYLE_ID = sty.STYLE_ID, t1.NEW_STYLE_CREATED = 1 ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.NEW_STYLE_CODE = sty.CODE AND sty.DELETED = 0 ");
+            s.Append(" WHERE t1.IS_INVALID = 0 AND t1.IS_OLD_STYLE = 0 AND t1.NEW_STYLE_CREATED = 0 ");
+ 
+            //Insert into stylecolor
+            s.Append(" INSERT INTO [dbo].[taps_st_stylecolor] ");
+            s.Append(" ([STYLE_ID] ");
+            s.Append(" ,[COLOR_ID] ");
+            s.Append(" ,[STATUS] ");
+            s.Append(" ,[PHASE_OUT_DATE] ");
+            s.Append(" ,[PHASED_OUT_BY] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[PHASE_OUT_REASON] ");
+            s.Append(" ,[IS_BOM] ");
+            s.Append(" ,[NRF_CODE] ");
+            s.Append(" ,[IS_PROCESS_FOR_BLANKS] ");
+            s.Append(" ,[MODEL_FLAG] ");
+            s.Append(" ,[MERCHANDISE_SEQ]) ");
+            s.Append(" SELECT ");
+            s.Append(" STYLE_ID ");
+            s.Append(" ,COLOR_ID ");
+            s.Append(" ,'A' AS STATUS "); // check status
+            s.Append(" ,'1900-01-01' AS PHASE_OUT_DATE ");
+            s.Append(" ,0 AS PHASED_OUT_BY ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,'' AS PHASE_OUT_REASON ");
+            s.Append(" ,'' AS IS_BOM ");
+            s.Append(" ,NEW_COLOR_NRF "); 
+            s.Append(" ,0 AS IS_PROCESS_FOR_BLANKS ");
+            s.Append(" ,NULL ");
+            s.Append(" ,NULL ");
+            s.Append(" FROM #csvdata ");
+            s.Append(" WHERE NEW_STYLE_CREATED = 1 ");
+            s.Append(" ORDER BY STYLE_ID  ");
+ 
+            s.Append(" INSERT INTO [dbo].[taps_st_stylesize] ");
+            s.Append(" ([SIZECODE_ID] ");
+            s.Append(" ,[STYLE_ID] ");
+            s.Append(" ,[ACTIVE] ");
+            s.Append(" ,[CODE] ");
+            s.Append(" ,[SEQ] ");
+            s.Append(" ,[DELETED]  ");
+            s.Append(" ,[CREATE_DATE]  ");
+            s.Append(" ,[CREATED_BY] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE]) ");
+            s.Append(" SELECT ");
+            s.Append(" szc.SIZECODE_ID ");
+            s.Append(" ,t1.STYLE_ID ");
+            s.Append(" ,1 AS ACTIVE ");
+            s.Append(" ,szc.CODE ");
+            s.Append(" ,szc.SEQ ");
+            s.Append(" ,0 AS DELETED  ");
+            s.Append(" ,NULL AS CREATE_DATE ");
+            s.Append(" ,0 AS CREATED_BY  ");
+            s.Append(" ,0 AS MODIFIED_BY ");
+            s.Append(" ,NULL MODIFIED_DATE ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_sizecode AS szc ON t1.SIZESCALE_ID = szc.SIZESCALE_ID AND szc.DELETED = 0  ");
+            s.Append(" WHERE t1.NEW_STYLE_CREATED = 1  ");
+            s.Append(" ORDER BY t1.STYLE_ID, szc.SEQ  ");
+ 
+ 
+ 
+            // Update centristylelink
+ 
+            //INSERT EVERY NEW STYLE INTO centric link table
+            s.Append(" INSERT INTO [dbo].[taps_st_centricstylelink] ");
+            s.Append(" (CENTRIC_NUM ");
+            s.Append(" ,STYLE_ID ");
+            s.Append(" ,DELETED ");
+            s.Append(" ,CREATED_BY ");
+            s.Append(" ,CREATE_DATE ");
+            s.Append(" ,MODIFIED_BY ");
+            s.Append(" ,MODIFIED_DATE ");
+            s.Append(" ,UTC_CREATE_DATE ");
+            s.Append(" ,UTC_MODIFIED_DATE) ");
+ 
+            s.Append(" SELECT ");
+            s.Append(" t1.CSV_ID ");
+            s.Append(" ,MAX(t1.STYLE_ID) AS STYLE_ID ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,@userId AS CREATED_BY ");
+            s.Append(" ,@createdate AS CREATE_DATE ");
+            s.Append(" ,0 AS MODIFIED_BY ");
+            s.Append(" ,NULL AS MODIFIED_DATE ");
+            s.Append(" ,@utcCreateDate AS UTC_CREATE_DATE ");
+            s.Append(" ,NULL AS UTC_MODIFIED_DATE ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" LEFT OUTER JOIN taps_st_centricstylelink AS l ON t1.CSV_ID = l.CENTRIC_NUM AND l.DELETED = 0 ");
+            s.Append(" WHERE t1.IS_INVALID = 0 AND t1.CSV_ID <> '' AND t1.STYLE_ID > 0 ");
+            s.Append(" AND l.CENTRICSTYLELINK_ID IS NULL ");
+            s.Append(" GROUP BY t1.CSV_ID ");
+ 
+ 
+ 
+            // Fill OLD_ columns
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.OLD_SIZESCALE_ID = sty.SIZESCALE_ID, t1.OLD_STDIV_ID = sty.STDIV_ID, t1.OLD_SEASON_ID = sty.SEASON_ID, t1.OLD_STYLE_DESC = sty.DESCRIPTION, t1.OLD_WHOLESALE_PRICE = sty.WHOLESALE_PRICE, t1.OLD_RETAIL_PRICE = sty.RETAIL_PRICE, ");
+            s.Append(" t1.OLD_COST = sty.COST, t1.OLD_WEIGHT = sty.ITEM_WEIGHT, t1.OLD_STATUS = sty.STATUS, t1.OLD_STYLE_CODE = sty.CODE ");
+            s.Append(" FROM #csvdata AS t1");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.STYLE_ID = sty.STYLE_ID ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 ");
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.OLD_COLOR_ID = sc.COLOR_ID ");
+            s.Append(" FROM #csvdata AS t1");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.STYLE_ID = sty.STYLE_ID ");
+            s.Append(" INNER JOIN taps_st_stylecolor AS sc ON t1.STYLE_ID = sc.STYLE_ID AND sc.DELETED = 0 ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 ");
+ 
+ 
+            //Style Division
+            s.Append(" UPDATE sty ");
+            s.Append(" SET sty.STDIV_ID = t1.STDIV_ID, sty.MODIFIED_BY = @userId, sty.MODIFIED_DATE = @createdate ");
+            s.Append(" FROM #csvdata AS t1");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.STYLE_ID = sty.STYLE_ID ");
+            s.Append("  WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_STDIV_ID <> t1.STDIV_ID ");
+ 
+ 
+            s.Append(" INSERT INTO [dbo].[taps_st_StyleAudit] ");
+           s.Append(" ([HEADER_TABLE] ");
+            s.Append(" ,[MAIN_OBJ_NAME] ");
+            s.Append(" ,[TABLE_NAME] ");
+            s.Append(" ,[OBJECT_ID] ");
+            s.Append(" ,[FIELD_NAME] ");
+            s.Append(" ,[DISPLAY_NAME] ");
+            s.Append(" ,[OLD_VALUE] ");
+            s.Append(" ,[NEW_VALUE] ");
+            s.Append(" ,[OLD_DISPLAY_VALUE] ");
+            s.Append(" ,[NEW_DISPLAY_VALUE] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[UTC_MODIFIED_DATE] ");
+            s.Append(" ,[INNER_OBJECT] ");
+            s.Append(" ,[INNER_OBJECTID] ");
+            s.Append(" ,[STATE] ");
+            s.Append(" ,[DESCRIPTION]) ");
+            s.Append(" SELECT ");
+            s.Append(" 'taps_st_style' AS HEADER_TABLE ");
+            s.Append(" ,'StyleBO' AS MAIN_OBJ_NAME ");
+            s.Append(" ,'taps_st_style' AS TABLE_NAME ");
+            s.Append(" ,t1.STYLE_ID AS OBJECT_ID ");
+            s.Append(" ,'STDIV_ID' ");
+            s.Append(" ,'Division' ");
+            s.Append(" ,t1.OLD_STDIV_ID ");
+            s.Append(" ,t1.STDIV_ID ");
+            s.Append(" ,UPPER(sd.NAME) ");
+            s.Append(" ,UPPER(sd2.NAME) ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,@userId ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@utcCreateDate ");
+            s.Append(" ,'' ");
+            s.Append(" ,0 ");
+            s.Append(" ,'MODIFIED' ");
+            s.Append(" ,NULL ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_co_style_division AS sd ON t1.OLD_STDIV_ID = sd.STDIV_ID   ");//GET OLD STDIV DESC
+            s.Append(" INNER JOIN taps_co_style_division AS sd2 ON t1.STDIV_ID = sd2.STDIV_ID   "); // GET NEW STDIV DESC
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_STDIV_ID <> t1.STDIV_ID ");
+ 
+ 
+            //SEASON
+            s.Append(" UPDATE sty ");
+            s.Append(" SET sty.SEASON_ID = t1.SEASON_ID, sty.MODIFIED_BY = @userId, sty.MODIFIED_DATE = @createdate ");
+            s.Append(" FROM #csvdata AS t1");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.STYLE_ID = sty.STYLE_ID ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_SEASON_ID <> t1.SEASON_ID ");
+ 
+            s.Append(" INSERT INTO [dbo].[taps_st_StyleAudit] ");
+            s.Append(" ([HEADER_TABLE] ");
+            s.Append(" ,[MAIN_OBJ_NAME] ");
+            s.Append(" ,[TABLE_NAME] ");
+            s.Append(" ,[OBJECT_ID] ");
+            s.Append(" ,[FIELD_NAME] ");
+            s.Append(" ,[DISPLAY_NAME] ");
+            s.Append(" ,[OLD_VALUE] ");
+            s.Append(" ,[NEW_VALUE] ");
+            s.Append(" ,[OLD_DISPLAY_VALUE] ");
+            s.Append(" ,[NEW_DISPLAY_VALUE] ");
+            s.Append(" ,[DELETED] ");
+           s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[UTC_MODIFIED_DATE] ");
+            s.Append(" ,[INNER_OBJECT] ");
+            s.Append(" ,[INNER_OBJECTID] ");
+            s.Append(" ,[STATE] ");
+            s.Append(" ,[DESCRIPTION]) ");
+            s.Append(" SELECT ");
+            s.Append(" 'taps_st_style' AS HEADER_TABLE ");
+            s.Append(" ,'StyleBO' AS MAIN_OBJ_NAME ");
+            s.Append(" ,'taps_st_style' AS TABLE_NAME ");
+            s.Append(" ,STYLE_ID AS OBJECT_ID ");
+            s.Append(" ,'SEASON_ID' ");
+            s.Append(" ,'Season' ");
+            s.Append(" ,t1.OLD_SEASON_ID ");
+            s.Append(" ,t1.SEASON_ID ");
+            s.Append(" ,UPPER(s.DESCRIPTION) ");
+            s.Append(" ,UPPER(t1.CSV_SEASON_DESC) ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,@userId ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@utcCreateDate ");
+            s.Append(" ,'' ");
+            s.Append(" ,0 ");
+            s.Append(" ,'MODIFIED' ");
+            s.Append(" ,NULL ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_season AS s ON t1.OLD_SEASON_ID = s.SEASON_ID   ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_SEASON_ID <> t1.SEASON_ID ");
+ 
+ 
+            //STYLE NUM/CODE
+            s.Append(" UPDATE sty ");
+            s.Append(" SET sty.CODE = UPPER(t1.NEW_STYLE_CODE), sty.MODIFIED_BY = @userId, sty.MODIFIED_DATE = @createdate ");
+            s.Append(" FROM #csvdata AS t1");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.STYLE_ID = sty.STYLE_ID ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_STYLE_CODE <> t1.NEW_STYLE_CODE ");
+ 
+            s.Append(" INSERT INTO [dbo].[taps_st_StyleAudit] ");
+            s.Append(" ([HEADER_TABLE] ");
+            s.Append(" ,[MAIN_OBJ_NAME] ");
+            s.Append(" ,[TABLE_NAME] ");
+            s.Append(" ,[OBJECT_ID] ");
+            s.Append(" ,[FIELD_NAME] ");
+            s.Append(" ,[DISPLAY_NAME] ");
+            s.Append(" ,[OLD_VALUE] ");
+            s.Append(" ,[NEW_VALUE] ");
+            s.Append(" ,[OLD_DISPLAY_VALUE] ");
+            s.Append(" ,[NEW_DISPLAY_VALUE] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[UTC_MODIFIED_DATE] ");
+            s.Append(" ,[INNER_OBJECT] ");
+            s.Append(" ,[INNER_OBJECTID] ");
+            s.Append(" ,[STATE] ");
+            s.Append(" ,[DESCRIPTION]) ");
+            s.Append(" SELECT ");
+            s.Append(" 'taps_st_style' AS HEADER_TABLE ");
+            s.Append(" ,'StyleBO' AS MAIN_OBJ_NAME ");
+            s.Append(" ,'taps_st_style' AS TABLE_NAME ");
+            s.Append(" ,t1.STYLE_ID AS OBJECT_ID ");
+            s.Append(" ,'CODE' ");
+            s.Append(" ,'Style #' ");
+           s.Append(" ,0 ");
+            s.Append(" ,0 ");
+            s.Append(" ,UPPER(t1.OLD_STYLE_CODE) ");
+            s.Append(" ,UPPER(t1.NEW_STYLE_CODE) ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,@userId ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@utcCreateDate ");
+            s.Append(" ,'' ");
+            s.Append(" ,0 ");
+            s.Append(" ,'MODIFIED' ");
+            s.Append(" ,NULL ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_STYLE_CODE <> t1.NEW_STYLE_CODE ");
+ 
+            //STYLE DESC
+            s.Append(" UPDATE sty ");
+            s.Append(" SET sty.DESCRIPTION = UPPER(t1.NEW_STYLE_DESC), MODIFIED_BY = @userId, MODIFIED_DATE = @createdate ");
+            s.Append(" FROM #csvdata AS t1");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.STYLE_ID = sty.STYLE_ID ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_STYLE_DESC <> t1.NEW_STYLE_DESC ");
+ 
+            s.Append(" INSERT INTO [dbo].[taps_st_StyleAudit] ");
+            s.Append(" ([HEADER_TABLE] ");
+            s.Append(" ,[MAIN_OBJ_NAME] ");
+            s.Append(" ,[TABLE_NAME] ");
+            s.Append(" ,[OBJECT_ID] ");
+            s.Append(" ,[FIELD_NAME] ");
+            s.Append(" ,[DISPLAY_NAME] ");
+            s.Append(" ,[OLD_VALUE] ");
+            s.Append(" ,[NEW_VALUE] ");
+            s.Append(" ,[OLD_DISPLAY_VALUE] ");
+            s.Append(" ,[NEW_DISPLAY_VALUE] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[UTC_MODIFIED_DATE] ");
+            s.Append(" ,[INNER_OBJECT] ");
+            s.Append(" ,[INNER_OBJECTID] ");
+            s.Append(" ,[STATE] ");
+            s.Append(" ,[DESCRIPTION]) ");
+            s.Append(" SELECT ");
+            s.Append(" 'taps_st_style' AS HEADER_TABLE ");
+            s.Append(" ,'StyleBO' AS MAIN_OBJ_NAME ");
+            s.Append(" ,'taps_st_style' AS TABLE_NAME ");
+            s.Append(" ,t1.STYLE_ID AS OBJECT_ID ");
+            s.Append(" ,'DESCRIPTION' ");
+            s.Append(" ,'Description' ");
+            s.Append(" ,0 ");
+            s.Append(" ,0 ");
+            s.Append(" ,UPPER(t1.OLD_STYLE_DESC) ");
+            s.Append(" ,UPPER(t1.NEW_STYLE_DESC) ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,@userId ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@utcCreateDate ");
+            s.Append(" ,'' ");
+            s.Append(" ,0 ");
+            s.Append(" ,'MODIFIED' ");
+            s.Append(" ,NULL ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_STYLE_DESC <> t1.NEW_STYLE_DESC ");
+ 
+            //WHOLESALE PRICE
+            s.Append(" UPDATE sty ");
+            s.Append(" SET sty.WHOLESALE_PRICE = CAST(t1.CSV_WHOLESALE_PRICE AS DECIMAL(38,2)), sty.MODIFIED_BY = @userId, sty.MODIFIED_DATE = @createdate ");
+            s.Append(" FROM #csvdata AS t1");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.STYLE_ID = sty.STYLE_ID ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_WHOLESALE_PRICE <> t1.CSV_WHOLESALE_PRICE ");
+ 
+ 
+            s.Append(" INSERT INTO [dbo].[taps_st_StyleAudit] ");
+            s.Append(" ([HEADER_TABLE] ");
+            s.Append(" ,[MAIN_OBJ_NAME] ");
+            s.Append(" ,[TABLE_NAME] ");
+            s.Append(" ,[OBJECT_ID] ");
+            s.Append(" ,[FIELD_NAME] ");
+            s.Append(" ,[DISPLAY_NAME] ");
+            s.Append(" ,[OLD_VALUE] ");
+            s.Append(" ,[NEW_VALUE] ");
+            s.Append(" ,[OLD_DISPLAY_VALUE] ");
+            s.Append(" ,[NEW_DISPLAY_VALUE] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[UTC_MODIFIED_DATE] ");
+            s.Append(" ,[INNER_OBJECT] ");
+            s.Append(" ,[INNER_OBJECTID] ");
+            s.Append(" ,[STATE] ");
+            s.Append(" ,[DESCRIPTION]) ");
+            s.Append(" SELECT ");
+            s.Append(" 'taps_st_style' AS HEADER_TABLE ");
+            s.Append(" ,'StyleBO' AS MAIN_OBJ_NAME ");
+            s.Append(" ,'taps_st_style' AS TABLE_NAME ");
+            s.Append(" ,t1.STYLE_ID AS OBJECT_ID ");
+            s.Append(" ,'WHOLESALE_PRICE' ");
+            s.Append(" ,'Wholesale Price' ");
+            s.Append(" ,0 ");
+            s.Append(" ,0 ");
+            s.Append(" ,CAST(t1.OLD_WHOLESALE_PRICE AS DECIMAL(38,2)) ");
+            s.Append(" ,CAST(t1.CSV_WHOLESALE_PRICE AS DECIMAL(38,2)) ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,@userId ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@utcCreateDate ");
+            s.Append(" ,'' ");
+            s.Append(" ,0 ");
+            s.Append(" ,'MODIFIED' ");
+            s.Append(" ,NULL ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_WHOLESALE_PRICE <> t1.CSV_WHOLESALE_PRICE ");
+ 
+ 
+            //RETAIL PRICE
+            s.Append(" UPDATE sty ");
+            s.Append(" SET sty.RETAIL_PRICE = CAST(t1.CSV_RETAIL_PRICE AS DECIMAL(38,2)), sty.MODIFIED_BY = @userId, sty.MODIFIED_DATE = @createdate ");
+            s.Append(" FROM #csvdata AS t1");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.STYLE_ID = sty.STYLE_ID ");
+            s.Append("  WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_RETAIL_PRICE <> t1.CSV_RETAIL_PRICE ");
+ 
+ 
+            s.Append(" INSERT INTO [dbo].[taps_st_StyleAudit] ");
+            s.Append(" ([HEADER_TABLE] ");
+            s.Append(" ,[MAIN_OBJ_NAME] ");
+            s.Append(" ,[TABLE_NAME] ");
+            s.Append(" ,[OBJECT_ID] ");
+            s.Append(" ,[FIELD_NAME] ");
+            s.Append(" ,[DISPLAY_NAME] ");
+            s.Append(" ,[OLD_VALUE] ");
+            s.Append(" ,[NEW_VALUE] ");
+            s.Append(" ,[OLD_DISPLAY_VALUE] ");
+            s.Append(" ,[NEW_DISPLAY_VALUE] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[UTC_MODIFIED_DATE] ");
+            s.Append(" ,[INNER_OBJECT] ");
+            s.Append(" ,[INNER_OBJECTID] ");
+            s.Append(" ,[STATE] ");
+            s.Append(" ,[DESCRIPTION]) ");
+            s.Append(" SELECT ");
+            s.Append(" 'taps_st_style' AS HEADER_TABLE ");
+            s.Append(" ,'StyleBO' AS MAIN_OBJ_NAME ");
+            s.Append(" ,'taps_st_style' AS TABLE_NAME ");
+            s.Append(" ,t1.STYLE_ID AS OBJECT_ID ");
+            s.Append(" ,'RETAIL_PRICE' ");
+            s.Append(" ,'Retail Price' ");
+            s.Append(" ,0 ");
+            s.Append(" ,0 ");
+            s.Append(" ,CAST(t1.OLD_RETAIL_PRICE AS DECIMAL(38,2)) ");
+            s.Append(" ,CAST(t1.CSV_RETAIL_PRICE AS DECIMAL(38,2)) ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,@userId ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@utcCreateDate ");
+            s.Append(" ,'' ");
+            s.Append(" ,0 ");
+            s.Append(" ,'MODIFIED' ");
+            s.Append(" ,NULL ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_RETAIL_PRICE <> t1.CSV_RETAIL_PRICE ");
+ 
+ 
+            //COST
+            s.Append(" UPDATE sty ");
+            s.Append(" SET sty.COST = CAST(t1.CSV_COST AS DECIMAL(38,2)), sty.MODIFIED_BY = @userId, sty.MODIFIED_DATE = @createdate  ");
+            s.Append(" FROM #csvdata AS t1");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.STYLE_ID = sty.STYLE_ID ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_COST <> t1.CSV_COST ");
+ 
+ 
+            s.Append(" INSERT INTO [dbo].[taps_st_StyleAudit] ");
+            s.Append(" ([HEADER_TABLE] ");
+            s.Append(" ,[MAIN_OBJ_NAME] ");
+            s.Append(" ,[TABLE_NAME] ");
+            s.Append(" ,[OBJECT_ID] ");
+            s.Append(" ,[FIELD_NAME] ");
+            s.Append(" ,[DISPLAY_NAME] ");
+            s.Append(" ,[OLD_VALUE] ");
+            s.Append(" ,[NEW_VALUE] ");
+            s.Append(" ,[OLD_DISPLAY_VALUE] ");
+            s.Append(" ,[NEW_DISPLAY_VALUE] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[UTC_MODIFIED_DATE] ");
+            s.Append(" ,[INNER_OBJECT] ");
+            s.Append(" ,[INNER_OBJECTID] ");
+            s.Append(" ,[STATE] ");
+            s.Append(" ,[DESCRIPTION]) ");
+            s.Append(" SELECT ");
+            s.Append(" 'taps_st_style' AS HEADER_TABLE ");
+            s.Append(" ,'StyleBO' AS MAIN_OBJ_NAME ");
+            s.Append(" ,'taps_st_style' AS TABLE_NAME ");
+            s.Append(" ,t1.STYLE_ID AS OBJECT_ID ");
+            s.Append(" ,'COST' ");
+            s.Append(" ,'Cost' ");
+            s.Append(" ,0 ");
+            s.Append(" ,0 ");
+            s.Append(" ,CAST(t1.OLD_COST AS DECIMAL(38,2)) ");
+            s.Append(" ,CAST(t1.CSV_COST AS DECIMAL(38,2)) ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,@userId ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@utcCreateDate ");
+            s.Append(" ,'' ");
+            s.Append(" ,0 ");
+            s.Append(" ,'MODIFIED' ");
+            s.Append(" ,NULL ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_COST <> t1.CSV_COST ");
+ 
+            //WEIGHT
+            s.Append(" UPDATE sty ");
+            s.Append(" SET sty.ITEM_WEIGHT = CAST(t1.CSV_WEIGHT AS DECIMAL(38,2)), sty.MODIFIED_BY = @userId, sty.MODIFIED_DATE = @createdate ");
+            s.Append(" FROM #csvdata AS t1");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.STYLE_ID = sty.STYLE_ID ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_WEIGHT <> t1.CSV_WEIGHT ");
+ 
+            s.Append(" INSERT INTO [dbo].[taps_st_StyleAudit] ");
+            s.Append(" ([HEADER_TABLE] ");
+            s.Append(" ,[MAIN_OBJ_NAME] ");
+            s.Append(" ,[TABLE_NAME] ");
+            s.Append(" ,[OBJECT_ID] ");
+            s.Append(" ,[FIELD_NAME] ");
+            s.Append(" ,[DISPLAY_NAME] ");
+            s.Append(" ,[OLD_VALUE] ");
+            s.Append(" ,[NEW_VALUE] ");
+            s.Append(" ,[OLD_DISPLAY_VALUE] ");
+            s.Append(" ,[NEW_DISPLAY_VALUE] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[UTC_MODIFIED_DATE] ");
+            s.Append(" ,[INNER_OBJECT] ");
+            s.Append(" ,[INNER_OBJECTID] ");
+            s.Append(" ,[STATE] ");
+            s.Append(" ,[DESCRIPTION]) ");
+            s.Append(" SELECT ");
+            s.Append(" 'taps_st_style' AS HEADER_TABLE ");
+            s.Append(" ,'StyleBO' AS MAIN_OBJ_NAME ");
+            s.Append(" ,'taps_st_style' AS TABLE_NAME ");
+            s.Append(" ,t1.STYLE_ID AS OBJECT_ID ");
+            s.Append(" ,'ITEM_WEIGHT' ");
+            s.Append(" ,'Item Weight' ");
+            s.Append(" ,0 ");
+            s.Append(" ,0 ");
+            s.Append(" ,CAST(t1.OLD_WEIGHT AS DECIMAL(38,2)) ");
+            s.Append(" ,CAST(t1.CSV_WEIGHT AS DECIMAL(38,2)) ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,@userId ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@utcCreateDate ");
+            s.Append(" ,'' ");
+            s.Append(" ,0 ");
+            s.Append(" ,'MODIFIED' ");
+            s.Append(" ,NULL ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_WEIGHT <> t1.CSV_WEIGHT ");
+ 
+            //STATUS
+            s.Append(" UPDATE sty ");
+            s.Append(" SET sty.STATUS = t1.NEW_STATUS, MODIFIED_BY = @userId, MODIFIED_DATE = @createdate ");
+            s.Append(" FROM #csvdata AS t1");
+            s.Append(" INNER JOIN taps_st_style AS sty ON t1.STYLE_ID = sty.STYLE_ID ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_STATUS <> t1.NEW_STATUS ");
+ 
+            s.Append(" INSERT INTO [dbo].[taps_st_StyleAudit] ");
+            s.Append(" ([HEADER_TABLE] ");
+            s.Append(" ,[MAIN_OBJ_NAME] ");
+            s.Append(" ,[TABLE_NAME] ");
+            s.Append(" ,[OBJECT_ID] ");
+            s.Append(" ,[FIELD_NAME] ");
+            s.Append(" ,[DISPLAY_NAME] ");
+            s.Append(" ,[OLD_VALUE] ");
+            s.Append(" ,[NEW_VALUE] ");
+            s.Append(" ,[OLD_DISPLAY_VALUE] ");
+            s.Append(" ,[NEW_DISPLAY_VALUE] ");
+            s.Append(" ,[DELETED] ");
+            s.Append(" ,[MODIFIED_BY] ");
+            s.Append(" ,[MODIFIED_DATE] ");
+            s.Append(" ,[UTC_MODIFIED_DATE] ");
+            s.Append(" ,[INNER_OBJECT] ");
+            s.Append(" ,[INNER_OBJECTID] ");
+            s.Append(" ,[STATE] ");
+            s.Append(" ,[DESCRIPTION]) ");
+            s.Append(" SELECT ");
+            s.Append(" 'taps_st_style' AS HEADER_TABLE ");
+            s.Append(" ,'StyleBO' AS MAIN_OBJ_NAME ");
+            s.Append(" ,'taps_st_style' AS TABLE_NAME ");
+            s.Append(" ,t1.STYLE_ID AS OBJECT_ID ");
+            s.Append(" ,'STATUS' ");
+            s.Append(" ,'Status' ");
+            s.Append(" ,0 ");
+            s.Append(" ,0 ");
+            s.Append(" ,t1.OLD_STATUS ");
+            s.Append(" ,t1.NEW_STATUS ");
+            s.Append(" ,0 AS DELETED ");
+            s.Append(" ,@userId ");
+            s.Append(" ,@createdate ");
+            s.Append(" ,@utcCreateDate ");
+            s.Append(" ,'' ");
+            s.Append(" ,0 ");
+            s.Append(" ,'MODIFIED' ");
+            s.Append(" ,NULL ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_STATUS <> t1.NEW_STATUS ");
+ 
+            // IMPORT NOTES CHANGES
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.IMPORT_NOTES = 'Old Color ' + color.CODE + ', New Color ' + UPPER(t1.NEW_COLOR_CODE) ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_color AS color ON color.COLOR_ID = t1.OLD_COLOR_ID ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_COLOR_ID <> t1.COLOR_ID ");
+ 
+ 
+            s.Append(" UPDATE t1 ");
+            s.Append(" SET t1.IMPORT_NOTES = 'Old Size Scale ' + sizescale.CODE + ', New Size Scale ' + UPPER(t1.CSV_SIZESCALE_CODE) ");
+            s.Append(" FROM #csvdata AS t1 ");
+            s.Append(" INNER JOIN taps_st_sizescale AS sizescale ON sizescale.SIZESCALE_ID = t1.OLD_SIZESCALE_ID ");
+            s.Append(" WHERE t1.IS_OLD_STYLE = 1 AND t1.OLD_SIZESCALE_ID <> t1.SIZESCALE_ID ");
+ 
+ 
+            return s.ToString();
+        }
+ 
+        private static System.Data.OleDb.OleDbConnection getConnection(string dir)
+        {
+            System.Data.OleDb.OleDbConnection connection = null;
+            if (Directory.Exists(dir))
+                connection = new System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" + dir + ";Extended Properties='Text;CharacterSet=65001;HDR=Yes;FMT=Delimited(,);IMEX=1'");
+            return connection;
+        }
+ 
+        private static System.Data.DataTable ReadCSVFileToDataTable(string filename)
+        {
+            System.Data.DataTable dt = null;
+            if (File.Exists(filename))
+            {
+                string dir = Path.GetDirectoryName(filename);
+                string file = Path.GetFileName(filename);
+                if (file.Length - file.Replace(".", "").Length <= 1)
+                {
+                    using (System.Data.OleDb.OleDbConnection connection = getConnection(dir))
+                    {
+                        if (connection != null)
+                        {
+                            connection.Open();
+                            if (connection.State.ToString().Equals("Open"))
+                            {
+                                using (System.Data.OleDb.OleDbDataAdapter dataAdapter = new System.Data.OleDb.OleDbDataAdapter("SELECT * FROM [" + file + "]", connection))
+                                {
+                                    dt = new System.Data.DataTable();
+                                    dataAdapter.Fill(dt);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return dt;
+        }
+ 
+        private static void RemoveDoubleQuotesFromHeaderRow(string filename)
+        {
+            if (File.Exists(filename))
+            {
+                string[] lines = File.ReadAllLines(filename);
+                if (lines != null && lines.Length > 0)
+                {
+                    lines[0] = lines[0].Replace("\"", "");
+                    File.WriteAllLines(filename, lines);
+                }
+            }
+        }
+ 
+        private static System.Data.DataTable ReadServerFile(string guidStr, string serverCSVFileName)
+        {
+            System.Data.DataTable dt = null;
+            string serverCSVFilePath = Application.TAPS.Common.GetApplicationPath.GetInstance().GetAttachmentPath(StyleListImportCentricStyle.ATTACHMENT_DIR_NAME);
+            string serverCSVFullFileName = Path.Combine(serverCSVFilePath, serverCSVFileName);
+            if (File.Exists(serverCSVFullFileName))
+            {
+                string fileExtension = Path.GetExtension(serverCSVFileName);
+                string tempFilePath = Path.Combine(serverCSVFilePath, "Temp");
+                string tempFileName = guidStr + fileExtension;
+                string tempFullFileName = Path.Combine(tempFilePath, tempFileName);
+                try
+                {
+                    if (!Directory.Exists(tempFilePath))
+                        Directory.CreateDirectory(tempFilePath);
+                    File.Copy(serverCSVFullFileName, tempFullFileName, true);
+                    RemoveDoubleQuotesFromHeaderRow(tempFullFileName);
+                    dt = ReadCSVFileToDataTable(tempFullFileName);
+                }
+                finally
+                {
+                    if (File.Exists(tempFullFileName))
+                        File.Delete(tempFullFileName);
+                }
+            }
+            return dt;
+        }
+ 
+        private static void OpenWaitForm(DevExpress.XtraEditors.XtraForm callerForm, System.Threading.CancellationTokenSource tokenSource)
+        {
+            //Close Wait Form
+            DevExpress.XtraSplashScreen.SplashScreenManager.CloseForm(false, 0, null, true);
+ 
+            //Open Wait Form
+            DevExpress.XtraSplashScreen.SplashScreenManager.ShowForm(callerForm, typeof(GenericWaitForm), false, false, false, DevExpress.XtraSplashScreen.ParentFormState.Locked);
+            DevExpress.XtraSplashScreen.SplashScreenManager.Default.SendCommand(GenericWaitForm.WaitFormCommand.SendTokenSource, tokenSource);
+        }
+        private static void UpdateWaitForm(GenericWaitForm.WaitFormState state)
+        {
+            DevExpress.XtraSplashScreen.SplashScreenManager.Default.SendCommand(GenericWaitForm.WaitFormCommand.SetState, state);
+        }
+        private static void CloseWaitForm()
+        {
+            //Close Wait Form
+            DevExpress.XtraSplashScreen.SplashScreenManager.CloseForm(false, 0, null, true);
+        }
+    }
+}
+ 
